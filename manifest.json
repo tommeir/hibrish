@@ -6,7 +6,7 @@
    "browser_action": {
       "browser_style": true,
       "default_icon": {
-         "128": "icon128.png"
+         "128": "favicon.png"
       },
       "default_popup": "popup.html",
       "default_title": "Hibrish"

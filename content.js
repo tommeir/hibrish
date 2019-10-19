@@ -1,6 +1,3 @@
-
-	var global_tm_hibrishDictionary_en = [];
-
 (function () {
 	'use strict';
 	localStorage.setItem('debug', true);
@@ -8,22 +5,12 @@
 
 	log('Loading content script...');
 
-	var rules = null;
-	var options = null;
-	var parsedRules = false;
-	var parsedAbbrs = false;
 	var lastReplace = null;
-	var dicWordsCache = {};
-	var dic = null;
-	var dicLoading = false;
+	var lastCheck = null;
 	var tm_dicLoading = false;
 	var tm_dicLoading2 = false;
-	var customDictionary = [];
 	var tm_hibrishDictionary_he = [];
 	var tm_hibrishDictionary_en = [];
-	var tm_hibrishDictionary_keyed = [];
-	var tm_hibrishDictionary_keyed_en = [];
-	var lastCheck = 0;
 	var isDisabled = true;
 	var languageInput = null;
 	var languagePage = null;
@@ -31,27 +18,6 @@
 	var heb2engOn = false;
 	var eng2hebOn = false;
 
-	// load dictionary
-	var loadDic = function () {
-		if (dicLoading)
-			return;
-		dicLoading = true;
-		log('Loading dic...');
-		log('Custom dic:', customDictionary);
-		var init = Date.now();
-		var xhr = new XMLHttpRequest();
-		xhr.open('GET', chrome.extension.getURL('pt.dic'), true);
-		xhr.onreadystatechange = function () {
-			if (xhr.readyState == XMLHttpRequest.DONE && xhr.status == 200) {
-				var code = options.language == 'pt-PT' ?
-					(options.spelling == 1 ? '[^2367]' : (options.spelling == 2 ? '[^1357]' : '[^123567]')) : '[^4567]';
-				dic = "\n" + (xhr.responseText).replace(new RegExp('^.+' + code + '\n', 'gm'), '').replace(/\d/g, '') + "\n" + customDictionary.join("\n") + "\n";
-				log("Dic loaded: code = " + code + ", " + dic.length + " bytes, " + (Date.now() - init) + " ms)");
-				dicLoading = false;
-			}
-		};
-		xhr.send();
-	};
 
 	// load Hibrish hebrew dictionary
 	var tm_loadHibDic = function () {
@@ -66,28 +32,10 @@
 		xhr.onreadystatechange = function () {
 			if (xhr.readyState == XMLHttpRequest.DONE && xhr.status == 200) {
 				var tm_data = JSON.parse(xhr.responseText);
-				//log('log tm_rules',tm_data);
 				for (var i in tm_data) {
 					tm_hibrishDictionary_he[tm_data[i][1]] = tm_data[i][0];	
 				}
 				log('tm_hibrishDictionary_he',tm_hibrishDictionary_he);
-				/*
-				chrome.storage.local.get('tm_hibrishDictionary_he', function (tm_rules_data) {
-					
-						for (var i in tm_data) {
-							//tm_rules_data[tm_data[i][0]] = tm_data[i][1];
-							tm_rules_data[tm_data[i][1]] = tm_data[i][0];
-						}
-						tm_hibrishDictionary_keyed = tm_rules_data;
-						chrome.storage.local.set({
-							'tm_hibrishDictionary_he': tm_rules_data
-						}, function () {
-							log("tm_hibrishDictionary_he loaded.");
-							tm_hibrishDictionary_he = JSON.stringify(tm_rules_data)
-							localStorage.setItem('tm_hibrishDictionary_he', tm_hibrishDictionary_he);
-						});
-					
-				});*/
 				
 			}
 			tm_dicLoading = false;
@@ -118,38 +66,6 @@
 		xhr.send();
 	};
 
-	// load rules
-	var loadRules = async function () {
-		log('Loading rules...');
-		const now = Date.now();
-		checkUpdateRules();
-		var activeRules = [].concat(rules.customRules); // preserve rules.customRules
-		var activeAbbrs = [];
-		// fixme: cache active rules for efficiency
-		for (var i = 0; i < rules.rules.length; i++) {
-			if (!rules.disabledRules[rules.rules[i][0]])
-				activeRules.push(rules.rules[i]);
-		}
-		for (var i = 0; i < rules.abbrs.length; i++) {
-			if (!rules.disabledAbbrs[rules.abbrs[i][0]])
-				activeAbbrs.push(rules.abbrs[i]);
-		}
-		parsedRules = [];//(await parseRules(activeRules)).concat(await parseRules(getStaticRules()));
-		parsedAbbrs = [];//await parseRules(activeAbbrs, {
-				//caseSensitive: true
-			//});
-		log(parsedRules.length + ' rules and ' + parsedAbbrs.length + ' abbreviations loaded in ' + (Date.now() - now) + ' ms.');
-	};
-
-	// check for updated rules
-	var checkUpdateRules = function () {
-		if (Date.now() - rules.rulesTime > rules.updateInterval * 1000) {
-			sendMessage({
-				updateRules: true
-			});
-		}
-	};
-
 	// send message to background page
 	var sendMessage = function (message, cb) {
 		log('sending message:', message);
@@ -178,134 +94,13 @@
 			sendMessage({
 				isPortuguese: lastLanguage
 			});
+		}if('lineChange' in message) {
+
 		}
-	};
-
-
-	var replaceMultiple = function (str, a, b) {
-		for (var i = 0; i < a.length; i++)
-			str = str.replace(a[i], b[i]);
-		return str;
-	};
-
-	var regexGroups = function (regex) {
-		return regex
-		.replace(/\\pL/g, '[a-zA-ZàáâãéêíóôõúüçÀÁÂÃÉÊÍÓÔÕÚÜÇ]')
-		.replace(/\\pBL/g, '(?<=^|[^a-zA-ZàáâãéêíóôõúüçÀÁÂÃÉÊÍÓÔÕÚÜÇ])')
-		.replace(/\\pBR/g, '(?=$|[^a-zA-ZàáâãéêíóôõúüçÀÁÂÃÉÊÍÓÔÕÚÜÇ])')
-		.replace(/\\pV/g, '[aeiouáâãéêíóôõúüÁÂÃÉÊÍÓÔÕÚÜ]')
-		.replace(/\\pVE/g, '(?:e|é|ê)')
-		.replace(/\\pC/g, '[b-df-hj-np-tv-zçÇ]')
-		.replace(/\\pNUM/g, '(?:[0-9]+(?:[,.][0-9]+)?|uma?|dois|duas|tr[êe]s|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|catorze|quinze|dezasseis|dezassete|dezoito|dezanove|vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa|cem|duzentos|trezentos|quatrocentos|quinhentos|seiscentos|setecentos|oitocentos|novezentos|mil)');
-	};
-	var compileRule = match => new Promise(resolve => {
-			setTimeout(() => {
-				match.test('');
-				resolve();
-			}, 0);
-		});
-	var parseRules = async function (rules, details) {
-		if (!details)
-			details = {};
-		if (!('caseSensitive' in details))
-			details.caseSensitive = false;
-		var parsedRules = [];
-		for (var i = 0; i < rules.length; i++) {
-			var rule = regexGroups(rules[i][0].toString());
-			var replace = (typeof rules[i][1] == 'string') ?
-			'$1' + rules[i][1].replace(/\$(\d+)/g, function (match, p1) {
-				return '$' + (Number(p1) + 1);
-			}) :
-			(function (cb) {
-				return (function () {
-					var args = [];
-					for (var i = 0; i < arguments.length; i++)
-						args.push(arguments[i] ? arguments[i] : '');
-					var r = cb([args[1] ? args[0].substr(1) : args[0]].concat(args.slice(2, -2)));
-					return r ? args[1] + r : '';
-				});
-			})(rules[i][1]);
-			var flags = '';
-			var regs = rule.match(/^\/(.+)\/(.*?)$/);
-			if (regs) {
-				rule = regs[1];
-				flags = regs[2];
-			}
-			var regs = rule.match(/^\(\?<([!=])(.+?)\)(.+)/);
-			if (regs) {
-				//log('Lookbehind rule:', rule);
-				if (regs[1] == '=')
-					rule = '(^|[^a-zA-ZàáâãéêíóôõúüçÀÁÂÃÉÊÍÓÔÕÚÜÇ]|' + regs[2] + ')' + regs[3] + '(?=\\.?[^]$)';
-				// if (regs[1] == '=') rule = '(^| [\(\[]?|'+regs[2]+')' + regs[3] + '(?=\\.?[^]$)';
-				if (regs[1] == '!') {
-					if (/[^a-zA-Z0-9 ]/.test(regs[2])) {
-						log('Ignored imparsable rule with lookbehind:', rule);
-						continue;
-					}
-					rule = '(?!' + regs[2] + ')(.{' + regs[2].length + '}|^.{0,' + (regs[2].length - 1) + '})' + regs[3] + '(?=\\.?[^]$)';
-				}
-				//log('Lookbehind rule parsed:', rule);
-			} else if (/\(\?</.test(rule)) {
-				//log('Ignored rule with lookbehind:', rule);
-				continue;
-			} else
-				rule = '(^|[^a-zA-ZàáâãéêíóôõúüçÀÁÂÃÉÊÍÓÔÕÚÜÇ])' + rule + '(?=\\.?[^]$)';
-			// else rule = '(^| [\(\[]?)' + rule + '(?=\\.?[^]$)';
-			if (!flags && !details.caseSensitive)
-				flags = 'i';
-			try {
-				const match = new RegExp(rule, flags);
-				//match.test(''); // force compilation
-				await compileRule(match);
-				parsedRules.push([match, replace]);
-			} catch (e) {
-				log('Error parsing rule:' + rule, e);
-			}
-			// log('Parsed rule:', rules[i][0], '->', rule);
+		else {
+			log('unhandled message',[message,sender]);
 		}
-		//log("ParsedRules: ", parsedRules);
-		return parsedRules;
-	};
-/*
-	var isPortuguese = function (text) {
-		var words = text.match(/[a-zA-ZàáâãéêíóôõúüçÀÁÂÃÉÊÍÓÔÕÚÜÇ]{2,}/g);
-		var wordsPt = 0;
-		if (words) {
-			words = words.slice(-10);
-			for (var i = 0; i < words.length; i++) {
-				if (dicWordExists(words[i])) {
-					wordsPt++;
-				}
-			}
-			log("Portuguese words: " + wordsPt + " Total words: " + words.length + " Portuguese Ratio: " + (wordsPt / words.length));
-			var ratio = (wordsPt + 1) / (words.length + 1);
-			var result = ratio >= (lastLanguage ? .5 : .66);
-			log('isPortuguese:', words, 'current:', lastLanguage, 'ratio:', ratio, 'result:', result);
-			return result;
-		}
-		// if there is no text we assume the page's language or last detected language
-		return null;
-	};*/
-
-	var checkLanguage = function (fullText) {
-		var text = fullText
-			.replace(/https?:\/\/[^ \)\]]+/gi, '') // remove urls
-			.replace(/www\.[\w-]+\.[\w-]+[^ \)\]]*/gi, '') // remove urls
-			.replace(/[\w.+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+/gi, '') // remove emails
-			.replace(/[ru]\/[a-zA-ZàáâãéêíóôõúüçÀÁÂÃÉÊÍÓÔÕÚÜÇ0-9_-]+/gi, '') // remover users/subs
-			.replace(/«.+?»/g, '') // remove quotes
-			.replace(/".+?"/g, '') // remove quotes
-			.replace(/\*\*(.+?)\*\*/g, '$1') // remove bold
-			.replace(/\*.+?\*/g, '') // remove italic
-			.replace(/[a-zA-ZàáâãéêíóôõúüçÀÁÂÃÉÊÍÓÔÕÚÜÇ-]+\.?[^]$/, ''); // remove last word (including compound words)
-		// get last 10 words longer than 2 chars
-		var match = text.match(/([a-zA-ZàáâãéêíóôõúüçÀÁÂÃÉÊÍÓÔÕÚÜÇ]+[^a-zA-ZàáâãéêíóôõúüçÀÁÂÃÉÊÍÓÔÕÚÜÇ]+([a-zA-ZàáâãéêíóôõúüçÀÁÂÃÉÊÍÓÔÕÚÜÇ]{1,1}[^a-zA-ZàáâãéêíóôõúüçÀÁÂÃÉÊÍÓÔÕÚÜÇ]+)?){0,10}$/);
-		text = match[0];
-		log('fullText:', fullText);
-		log('text:', text);
-		//languageInput = isPortuguese(text);
-		languageUpdated();
-		return lastLanguage;
+		return ;
 	};
 
 	// update browser action badge color when detected language changes
@@ -322,81 +117,6 @@
 			});
 			lastLanguage = currentLanguage;
 		}
-	};
-
-	// apply every rule to the line
-	var scanLine = function (line) {
-		var scanLineRules = function (line, rules) {
-			var result = '';
-			for (var i = 0; i < rules.length; i++) {
-				const now = Date.now();
-				result = checkWord(line, rules[i][0], rules[i][1]);
-				if (result)
-					return result;
-			}
-		};
-		var result = '';
-		if (options.abbreviations && parsedAbbrs)
-			result = scanLineRules(line, parsedAbbrs);
-		if (!result)
-			result = scanLineRules(line, parsedRules);
-
-		// compound word
-		// hyphen doesn't trigger a check so we check compound words at once (now)
-		var match = (result || line).match(/^(.+-)([a-zA-ZàáâãéêíóôõúüçÀÁÂÃÉÊÍÓÔÕÚÜÇ]+\.?[^])$/);
-		if (match) {
-			var result2 = scanLine(match[1]); // recursion
-			if (result2)
-				result = result2 + match[2];
-		}
-		if (result)
-			log('Spell check: "' + line + '" -> "' + result + '"');
-		return result;
-	};
-
-	// apply a rule to the line
-	var checkWord = function (line, regex, replace) {
-		//log("Line: '"+line+"' Regex: "+regex+" Replace: "+replace);
-		var match;
-		if (match = line.match(regex)) {
-			var leftPadding = match.index + match[1].length;
-			var rightPadding = match.index + match[0].length - line.length;
-			var replaced = line.replace(regex, replace).slice(leftPadding, rightPadding);
-			//log(`replaced: '${replaced}'`);
-			if (replaced) {
-				log("Line: '" + line + "'");
-				log("Regex: " + regex + " Replace: " + replace + " Match:", match);
-				replaced = fixCase(line.slice(leftPadding, rightPadding), replaced);
-				log(`replaced: '${replaced}'`);
-				// log('check correction "' + replaced + '":', dicCheckSentence(replaced));
-				return line.slice(0, leftPadding) + replaced + line.slice(rightPadding);
-			}
-		}
-	};
-
-	// apply the case of the first string to the second string
-	var fixCase = function (str1, str2) {
-		// log(`fixCase: "${str1}" "${str2}"`);
-		var isUpperCase = function (s) {
-			return s == s.toUpperCase();
-		};
-		var isLowerCase = function (s) {
-			return s == s.toLowerCase();
-		};
-		var toTitleCase = function (s) {
-			return s.charAt(0).toUpperCase() + s.substr(1);
-		};
-		var isTitleCase = function (s) {
-			return s.charAt(0) == s.charAt(0).toUpperCase();
-		}; // it only checks the first letter
-
-		if (isLowerCase(str1))
-			return options.capitalization ? str2 : str2.toLowerCase();
-		if (isUpperCase(str1))
-			return str2.toUpperCase();
-		if (isTitleCase(str1))
-			return toTitleCase(str2);
-		return str2;
 	};
 
 
@@ -550,26 +270,6 @@ var check_engHib = function(wordEng) {
 	
 }
 
-	var escapeRegExp = function (str) {
-		return str.replace(/[\-\[\]\/\{\}\(\)\*\+\?\.\\\^\$\|]/g, "\\$&");
-	}
-
-	var removeDiacritics = function (str) {
-		(function (a, b) {
-			for (var i = 0; i < a.length; i++)
-				str = str.replace(new RegExp(a[i], 'g'), b[i]);
-		})(
-			['á', 'â', 'é', 'ê', 'í', 'ó', 'ô', 'ú', 'Á', 'Â', 'É', 'Ê', 'Í', 'Ó', 'Ô', 'Ú'],
-			['a', 'a', 'e', 'e', 'i', 'o', 'o', 'u', 'A', 'A', 'E', 'E', 'I', 'O', 'O', 'U']);
-		return str;
-	};
-
-	var tryCorrection = function (w1, w2) {
-		// log(`tryCorrection "${w1}" "${w2}"`);
-		if (!dicWordExists(w1) && dicWordExists(w2))
-			return w2;
-	};
-
 	var InputData = function (input) {
 		if ('value' in input) {
 			this.getText = function () {
@@ -619,8 +319,9 @@ var check_engHib = function(wordEng) {
 	};
 
 	var spellCheck = function (left) {
-		// log('spellcheck: "' + left + '"');
-		// if (/[a-zA-ZàáâãéêíóôõúüçÀÁÂÃÉÊÍÓÔÕÚÜÇ\-]$/.test(left)) return; // we're in the middle of a word
+		 //log('spellcheck: "' + left + '"');
+		
+		 // if (/[a-zA-ZàáâãéêíóôõúüçÀÁÂÃÉÊÍÓÔÕÚÜÇ\-]$/.test(left)) return; // we're in the middle of a word
 		if (!/([,;:\)\[\]*!?…\s\n]|\.\.+)$/.test(left))
 			return; // we're in the middle of a word ([ and * mark the end of word in bbcode and markdown contexts)
 
@@ -646,17 +347,19 @@ var check_engHib = function(wordEng) {
 
 		//if (!checkLanguage(left))
 		//	return;
-		
-		//disable removing punctuation as it also removes the hebrew using this regex:
-		//var onlywords = line.replace(/[^\w\s]|_/g, "")
-         //.replace(/\s+/g, " ");
-		//var onlywordsarray = onlywords.split(" ");
-		//var onlywordsarray = line.split(/(?:,| )+/);
-		//var onlywordsarray = line.split(/[\s,]+/);
-		//var onlywordsarray = line.split(/\W+/);
+
+
 		var onlywordsarray = line.split(/(?:,| )+/);
 		while(onlywordsarray[onlywordsarray.length-1] == "") 
 			onlywordsarray.pop(); //remove empty last words 
+		log(onlywordsarray);
+		
+		//skeleton call to bg page to do the spell checking instead. 
+		//todo: maybe delete this call  and rebuild with proper promise pattern?
+		sendMessage({
+			checkLine: onlywordsarray
+		});		
+		//back to real-time spagetti:
 		
 		var result_array_heb = new Array();
 		var result_array_eng = new Array();
@@ -675,8 +378,7 @@ var check_engHib = function(wordEng) {
 			result_array_heb = result_array_heb.concat(onlywordsarray.slice(-3).map(function(word) {
 				return convertHeb2Eng(word)
 			}));
-			
-			
+					
 			log("detected last 3 words are hebrish, switching text for you..."); //todo: make this configurable from options page
 			//log("onlywordsarray",onlywordsarray);
 			heb2engOn = true; //flag start transliterating letter by letter
@@ -690,13 +392,13 @@ var check_engHib = function(wordEng) {
 			return  left;
 			return result_array_heb;
 		}
-		//console.log('tm_hibrishDictionary_he',tm_hibrishDictionary_he);
-		//console.log('tm_hibrishDictionary_en',tm_hibrishDictionary_en);
-		//console.log('onlywordsarray',onlywordsarray);
-		//console.log('onlywordsarray[onlywordsarray.length - 1]',onlywordsarray[onlywordsarray.length - 1]);
-		//console.log('tm_hibrishDictionary_en[onlywordsarray[onlywordsarray.length - 1]]',tm_hibrishDictionary_en[onlywordsarray[onlywordsarray.length - 1]]);
+		//log('tm_hibrishDictionary_he',tm_hibrishDictionary_he);
+		//log('tm_hibrishDictionary_en',tm_hibrishDictionary_en);
+		//log('onlywordsarray',onlywordsarray);
+		//log('onlywordsarray[onlywordsarray.length - 1]',onlywordsarray[onlywordsarray.length - 1]);
+		//log('tm_hibrishDictionary_en[onlywordsarray[onlywordsarray.length - 1]]',tm_hibrishDictionary_en[onlywordsarray[onlywordsarray.length - 1]]);
 		
-		//from here we chack if typing 3 words in hebrew using the english keyboard:
+		//from here we check if typing 3 words in hebrew using the english keyboard:
 		if (tm_hibrishDictionary_en['\''+onlywordsarray[onlywordsarray.length - 1]+'\''] && 
 			tm_hibrishDictionary_en['\''+onlywordsarray[onlywordsarray.length - 2]+'\''] && 
 			tm_hibrishDictionary_en['\''+onlywordsarray[onlywordsarray.length - 3]+'\'']) {
@@ -707,33 +409,17 @@ var check_engHib = function(wordEng) {
 			trans_array = trans_array.map(function(word) {
 				return convertEng2Heb(word)
 				});
-/*			result_array_eng = result_array_eng.concat(onlywordsarray.slice(-3).map(function(word) {
-				return convertHeb2Eng(word)
-			}));*/
 			result_array_eng = result_array_eng.concat(trans_array);
 			
 			log("last 3 words are hebrish eng");
-			//console.log("onlywordsarray",onlywordsarray);
 			eng2hebOn = true; //flag start transliterating letter by letter
-			//console.log("result_array_eng",result_array_eng);
-			
-			//result_array_heb.push(" ");
-			//console.log("result_array_eng",result_array_eng);
-			
+
 			result_array_eng =  result_array_eng.join(" ");
 			result_array_eng = result_array_eng + ' ';
-			//console.log("result_array_eng",result_array_eng);
 
 			leftLines.push(result_array_eng.toString());
 			left = leftLines.join('');
 			return  left;
-			return result_array_eng;
-		}
-		// log('check: "'+line+'"');
-		if ((line = scanLine(line))) {
-			leftLines.push(line);
-			left = leftLines.join('');
-			return left;
 		}
 	};
 
@@ -743,22 +429,11 @@ var check_engHib = function(wordEng) {
 	chrome.storage.local.get(['rules', 'options', 'customDictionary'], function (items) {
 		log("Retrieved from storage:", items);
 
-		// custom dictionary
-		if (items.customDictionary)
-			customDictionary = items.customDictionary;
 		// load dic (after loading custom dictionary)
 		//loadDic();
 		tm_loadHibDic();
 		tm_loadEngDic();
 
-		// options
-		if (items.options)
-			options = items.options;
-		// rules
-		if (items.rules) {
-			rules = items.rules;
-			loadRules();
-		}
 	});
 	// retrieve language and disabled state from the background page
 	sendMessage({
@@ -767,28 +442,6 @@ var check_engHib = function(wordEng) {
 	});
 	// INIT END
 
-	// listen to storage changes
-	/*
-	chrome.storage.onChanged.addListener(function (changes, areaName) {
-		log('storage change:', areaName, changes);
-		if (areaName == 'local') {
-			if (changes.rules) {
-				rules = changes.rules.newValue;
-				loadRules();
-			}
-			if (changes.options) {
-				options = changes.options.newValue;
-				if (dic && (options.language != changes.options.oldValue.language || options.spelling != changes.options.oldValue.spelling)) {
-					loadDic();
-				}
-			}
-			if (changes.customDictionary) {
-				customDictionary = changes.customDictionary.newValue;
-				loadDic();
-			}
-		}
-	});
-	*/
 	// listen for messages from the background page
 	chrome.runtime.onMessage.addListener(handleMessage);
 
@@ -821,7 +474,8 @@ var check_engHib = function(wordEng) {
 		
 		}else{
 			var left = spellCheck(inputData.left);
-		}
+			//add async function version for spellcheck done on the background page?
+		}	
 		if (left) {
 			lastReplace = {
 				left: left,

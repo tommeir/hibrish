@@ -76,6 +76,9 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
     if ('isDisabled' in message) {
         response.isDisabled = isDisabledUrl(message.isDisabled) || false;
     }
+    if('checkLine' in message) {
+        response.lineChange = 'test';
+    }
     if ('isPortuguese' in message) {
         updateBadgeBackground(message.isPortuguese, sender.tab.id);
     }
