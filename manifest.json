@@ -1,0 +1,35 @@
+{
+   "background": {
+      "persistent": false,
+      "scripts": [ "browser-polyfill.js", "bg.js" ]
+   },
+   "browser_action": {
+      "browser_style": true,
+      "default_icon": {
+         "128": "icon128.png"
+      },
+      "default_popup": "popup.html",
+      "default_title": "Hibrish"
+   },
+   "content_scripts": [ {
+      "all_frames": true,
+      "js": [ "browser-polyfill.js", "check.js" ],
+      "match_about_blank": true,
+      "matches": [ "http://*/*", "https://*/*" ]
+   } ],
+   "description": "Makes Hibrish turn to English or Hebrew on-the-fly",
+   "icons": {
+      "128": "favicon.png"
+   },
+   "manifest_version": 2,
+   "name": "Hibrish",
+   "options_page": "options.html",
+   "options_ui": {
+      "chrome_style": true,
+      "open_in_tab": true,
+      "page": "options.html"
+   },
+   "permissions": [ "storage", "tabs", "*://*/*" ],
+   "version": "0.02",
+   "web_accessible_resources": [ "hibrish_engheb.json", "hibrish_hebeng.json","hibrish_hebeng2.json"]
+}
