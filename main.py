@@ -17,6 +17,14 @@ import html
 import re
 import ctypes
 import win32process
+import collections
+import functools
+
+VERBOSE = '-v' in sys.argv
+
+def debug_print(*args, **kwargs):
+    if VERBOSE:
+        print(*args, **kwargs)
 
 # Constants
 GITHUB_DICT_BASE = "https://raw.githubusercontent.com/wooorm/dictionaries/main/dictionaries/"
@@ -152,30 +160,37 @@ def load_spellchecker(folder):
         lines = f.readlines()
     if lines and lines[0].strip().isdigit():
         lines = lines[1:]
-    words = [line.strip().split("/")[0] for line in lines if line.strip() and not line.startswith("#")]
+    words = [line.strip().split("/")[0].lower() for line in lines if line.strip() and not line.startswith("#")]
     spell = SpellChecker(language=None)
     spell.word_frequency.load_words(words)
     return spell
 
 def get_foreground_keyboard_layout():
-    hwnd = win32gui.GetForegroundWindow()
-    thread_id = win32process.GetWindowThreadProcessId(hwnd)[0]
-    layout = win32api.GetKeyboardLayout(thread_id)
-    lang_id = f"{layout & 0xFFFF:04x}"
-    return lang_id
+    try:
+        hwnd = win32gui.GetForegroundWindow()
+        thread_id = win32process.GetWindowThreadProcessId(hwnd)[0]
+        layout = win32api.GetKeyboardLayout(thread_id)
+        lang_id = f"{layout & 0xFFFF:04x}"
+        return lang_id
+    except Exception as e:
+        debug_print(f"[ERROR] Failed to get foreground keyboard layout: {e}")
+        return None
 
 # Helper to switch Windows keyboard layout robustly
 def switch_keyboard_layout(lang_id, folder=None):
-    import win32gui
-    hwnd = win32gui.GetForegroundWindow()
-    # Use full 8-digit HKL string
-    hkl_str = f"0000{lang_id}" if len(lang_id) == 4 else lang_id
-    hkl = win32api.LoadKeyboardLayout(hkl_str, 0x00000001)  # KLF_ACTIVATE
-    print(f"[DEBUG] Switching keyboard layout to lang_id={lang_id}, folder={folder}, hkl_str={hkl_str}, hkl={hkl}")
-    win32gui.SendMessage(hwnd, 0x0050, 0, hkl)  # WM_INPUTLANGCHANGEREQUEST
-    # Verification: print the current layout after switching
-    current_layout = get_foreground_keyboard_layout()
-    print(f"[DEBUG] Current layout after switch: {current_layout}")
+    try:
+        import win32gui
+        hwnd = win32gui.GetForegroundWindow()
+        # Use full 8-digit HKL string
+        hkl_str = f"0000{lang_id}" if len(lang_id) == 4 else lang_id
+        hkl = win32api.LoadKeyboardLayout(hkl_str, 0x00000001)  # KLF_ACTIVATE
+        debug_print(f"[DEBUG] Switching keyboard layout to lang_id={lang_id}, folder={folder}, hkl_str={hkl_str}, hkl={hkl}")
+        win32gui.SendMessage(hwnd, 0x0050, 0, hkl)  # WM_INPUTLANGCHANGEREQUEST
+        # Verification: print the current layout after switching
+        current_layout = get_foreground_keyboard_layout()
+        debug_print(f"[DEBUG] Current layout after switch: {current_layout}")
+    except Exception as e:
+        debug_print(f"[ERROR] Failed to switch keyboard layout: {e}")
 
 # Helper to replace last N words in the active text field (simulate backspaces and typing)
 def replace_last_words(words, replacement_words):
@@ -247,14 +262,19 @@ def show_notification(msg):
 
 # Main word detection and correction logic
 def detect_and_correct_words(spellcheckers, lang_ids, lang_id_to_folder):
-    word_buffer = []
-    word_lang_buffer = []
+    word_buffer = collections.deque(maxlen=WORD_BUFFER_SIZE)
+    word_lang_buffer = collections.deque(maxlen=WORD_BUFFER_SIZE)
     current_word = ''
     last_correction = None
     current_lang_id = lang_ids[0]
     current_lang = lang_id_to_folder[current_lang_id]
-    print("\n[Typing monitor started. Type words, press space to finish a word. Press ESC to exit.")
+    debug_print("\n[Typing monitor started. Type words, press space to finish a word. Press ESC to exit.")
     exit_flag = threading.Event()
+
+    # Add LRU cache for word validity checks
+    @functools.lru_cache(maxsize=256)
+    def is_valid_word(word, lang):
+        return word in spellcheckers[lang]
 
     def on_key(event):
         nonlocal current_word, word_buffer, word_lang_buffer, last_correction, current_lang_id, current_lang
@@ -272,33 +292,37 @@ def detect_and_correct_words(spellcheckers, lang_ids, lang_id_to_folder):
                     if len(word_buffer) > WORD_BUFFER_SIZE:
                         word_buffer.pop(0)
                         word_lang_buffer.pop(0)
-                    # Always check the entire buffer
-                    invalid_count = len([w for w in word_buffer if w and w not in spellcheckers[current_lang]])
-                    valid_in_current = len([w for w in word_buffer if w and w in spellcheckers[current_lang]])
-                    print(f"[DEBUG] Buffer: {word_buffer}")
-                    print(f"[DEBUG] Invalid words in current lang ({current_lang}): {invalid_count} / {WORD_BUFFER_SIZE}")
-                    print(f"[DEBUG] Valid in current lang ({current_lang}): {valid_in_current}")
+                    buffer_words = [w.lower() for w in list(word_buffer)]
+                    spell_set = set(spellcheckers[current_lang].word_frequency._dictionary.keys())
+                    valid_words = set(buffer_words) & spell_set
+                    valid_in_current = len(valid_words)
+                    invalid_count = len(buffer_words) - valid_in_current
+                    debug_print(f"[DEBUG] Buffer: {buffer_words}")
+                    debug_print(f"[DEBUG] Invalid words in current lang ({current_lang}): {invalid_count} / {WORD_BUFFER_SIZE}")
+                    debug_print(f"[DEBUG] Valid in current lang ({current_lang}): {valid_in_current}")
                     if invalid_count >= 3:
                         # Try other languages
                         for lang, spell in spellcheckers.items():
                             if lang == current_lang:
                                 continue
-                            transliterated = [transliterate_word(w, current_lang, lang) for w in word_buffer]
-                            valid_in_other = len([w for w in transliterated if w and w in spell])
-                            print(f"[DEBUG] Checking {lang}: transliterated={transliterated}, valid_in_{lang}={valid_in_other}, valid_in_current={valid_in_current}")
+                            transliterated = [transliterate_word(w.lower(), current_lang, lang) for w in word_buffer]
+                            spell_set_other = set(spellcheckers[lang].word_frequency._dictionary.keys())
+                            valid_words_other = set(transliterated) & spell_set_other
+                            valid_in_other = len(valid_words_other)
+                            debug_print(f"[DEBUG] Checking {lang}: transliterated={transliterated}, valid_in_{lang}={valid_in_other}, valid_in_current={valid_in_current}")
                             if valid_in_other > valid_in_current and valid_in_other >= 3:
-                                show_notification(f"Auto-correcting to {lang} and switching keyboard layout. Replacing: {word_buffer} -> {transliterated}")
+                                show_notification(f"Auto-correcting to {lang} and switching keyboard layout. Replacing: {list(word_buffer)} -> {transliterated}")
                                 # Find lang_id for this lang
                                 for lid, folder in lang_id_to_folder.items():
                                     if folder == lang:
-                                        print(f"[DEBUG] Switching layout to {lang} (lang_id={lid}) after correction.")
+                                        debug_print(f"[DEBUG] Switching layout to {lang} (lang_id={lid}) after correction.")
                                         current_lang_id = lid
                                         current_lang = lang
                                         switch_keyboard_layout(lid, folder)
                                         break
                                 # Replace the entire buffer
-                                replace_last_words(word_buffer, transliterated)
-                                last_correction = (word_buffer[:], current_lang_id)
+                                replace_last_words(list(word_buffer), transliterated)
+                                last_correction = (list(word_buffer), current_lang_id)
                                 # Clear the buffer after correction
                                 word_buffer.clear()
                                 word_lang_buffer.clear()
@@ -427,3 +451,13 @@ if __name__ == "__main__":
         detect_and_correct_words(spellcheckers, list(lang_id_to_folder.keys()), lang_id_to_folder)
     else:
         print("Not enough languages loaded for correction logic demo.") 
+
+# --- Performance improvement suggestions for production readiness ---
+# 1. Use a compiled C extension or optimized library for spellchecking (e.g., native Hunspell bindings).
+# 2. Minimize per-keystroke processing; debounce or batch word checks.
+# 3. Use a ring buffer or deque for word_buffer for O(1) pops/appends.
+# 4. Avoid global interpreter lock (GIL) issues by offloading heavy work to a background thread or process.
+# 5. Profile and optimize transliteration and dictionary lookups (e.g., use tries or sets).
+# 6. Use native Windows hooks for more efficient keyboard event handling.
+# 7. Add error handling/logging for all Windows API calls.
+# 8. Consider packaging as a compiled executable for faster startup and lower memory usage. 
