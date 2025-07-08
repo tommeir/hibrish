@@ -12,6 +12,7 @@ import json
 import threading
 import time
 import pystray
+from pystray import MenuItem as item
 from PIL import Image, ImageDraw
 import html
 import re
@@ -19,6 +20,14 @@ import ctypes
 import win32process
 import collections
 import functools
+import webbrowser
+import tkinter as tk
+import tkinter.messagebox
+
+STATS_FILE = 'langswitch_stats.txt'
+LINKEDIN_LINK = 'https://www.linkedin.com/in/tommeir/'
+AUTHOR = 'Tom Meir'
+SECONDS_SAVED_PER = 5
 
 VERBOSE = '-v' in sys.argv
 
@@ -249,16 +258,48 @@ def debug_transliteration(word, from_lang, to_lang):
         print("  No mapping available.")
 
 # System tray icon setup
-def create_tray_icon():
+def create_tray_icon(on_details_callback, on_quit_callback):
     # Simple black/white icon
     image = Image.new('RGB', (64, 64), color='white')
     d = ImageDraw.Draw(image)
     d.rectangle([16, 16, 48, 48], fill='black')
-    return image
+
+    menu = (
+        item('Details', on_details_callback),
+        item('Quit', on_quit_callback),
+    )
+    return image, menu
 
 def show_notification(msg):
     print(f"[NOTIFY] {msg}")
     # For real notifications, use win10toast or similar
+
+def load_stats():
+    try:
+        with open(STATS_FILE, 'r') as f:
+            return int(f.read().strip())
+    except Exception:
+        return 0
+
+def save_stats(count):
+    try:
+        with open(STATS_FILE, 'w') as f:
+            f.write(str(count))
+    except Exception:
+        pass
+
+def format_time(seconds):
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds} second{'s' if seconds != 1 else ''}"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''}" + (f" {seconds} second{'s' if seconds != 1 else ''}" if seconds else "")
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours} hour{'s' if hours != 1 else ''}" + (f" {minutes} minute{'s' if minutes != 1 else ''}" if minutes else "")
+    days, hours = divmod(hours, 24)
+    return f"{days} day{'s' if days != 1 else ''}" + (f" {hours} hour{'s' if hours != 1 else ''}" if hours else "")
 
 # Main word detection and correction logic
 def detect_and_correct_words(spellcheckers, lang_ids, lang_id_to_folder):
@@ -270,6 +311,40 @@ def detect_and_correct_words(spellcheckers, lang_ids, lang_id_to_folder):
     current_lang = lang_id_to_folder[current_lang_id]
     debug_print("\n[Typing monitor started. Type words, press space to finish a word. Press ESC to exit.")
     exit_flag = threading.Event()
+
+    stats_count = load_stats()
+    def increment_stats():
+        nonlocal stats_count
+        stats_count += 1
+        save_stats(stats_count)
+
+    def on_details(icon, item):
+        time_saved = stats_count * SECONDS_SAVED_PER
+        time_str = format_time(time_saved)
+        msg = (f"Auto-corrected {stats_count} times.\n"
+               f"Estimated time saved: {time_str}.\n\n"
+               f"This app was created by {AUTHOR}.\n"
+               f"LinkedIn: {LINKEDIN_LINK}")
+        # Show a Tkinter popup with a clickable LinkedIn link
+        def show_popup():
+            root = tk.Tk()
+            root.title("LangSwitch Details")
+            root.geometry("400x200+{}+{}".format(
+                root.winfo_screenwidth() // 2 - 200,
+                root.winfo_screenheight() // 2 - 100))
+            root.resizable(False, False)
+            label = tk.Label(root, text=f"Auto-corrected {stats_count} times.\nEstimated time saved: {time_str}.\n", justify="center")
+            label.pack(pady=10)
+            def open_link(event):
+                webbrowser.open(LINKEDIN_LINK)
+            name_link = tk.Label(root, text="This app was created by Tom Meir", fg="blue", cursor="hand2", font=(None, 10, "underline"))
+            name_link.pack()
+            name_link.bind("<Button-1>", open_link)
+            close_btn = tk.Button(root, text="Close", command=root.destroy)
+            close_btn.pack(pady=10)
+            root.attributes('-topmost', True)
+            root.mainloop()
+        threading.Thread(target=show_popup, daemon=True).start()
 
     # Add LRU cache for word validity checks
     @functools.lru_cache(maxsize=256)
@@ -306,9 +381,8 @@ def detect_and_correct_words(spellcheckers, lang_ids, lang_id_to_folder):
                             if lang == current_lang:
                                 continue
                             transliterated = [transliterate_word(w.lower(), current_lang, lang) for w in word_buffer]
-                            spell_set_other = set(spellcheckers[lang].word_frequency._dictionary.keys())
-                            valid_words_other = set(transliterated) & spell_set_other
-                            valid_in_other = len(valid_words_other)
+                            other_spell_set = set(spellcheckers[lang].word_frequency._dictionary.keys())
+                            valid_in_other = len(set(transliterated) & other_spell_set)
                             debug_print(f"[DEBUG] Checking {lang}: transliterated={transliterated}, valid_in_{lang}={valid_in_other}, valid_in_current={valid_in_current}")
                             if valid_in_other > valid_in_current and valid_in_other >= 3:
                                 show_notification(f"Auto-correcting to {lang} and switching keyboard layout. Replacing: {list(word_buffer)} -> {transliterated}")
@@ -326,6 +400,7 @@ def detect_and_correct_words(spellcheckers, lang_ids, lang_id_to_folder):
                                 # Clear the buffer after correction
                                 word_buffer.clear()
                                 word_lang_buffer.clear()
+                                increment_stats()
                                 break
                 current_word = ''
             elif event.name == 'backspace':
@@ -348,6 +423,18 @@ def detect_and_correct_words(spellcheckers, lang_ids, lang_id_to_folder):
                 word = word_buffer[-1]
                 show_notification(f"Adding '{word}' to dictionary for {current_lang}.")
                 spellcheckers[current_lang].word_frequency.add(word)
+
+    def on_quit(icon, item):
+        debug_print('[DEBUG] Quit selected from tray menu.')
+        exit_flag.set()
+        keyboard.unhook_all()
+        icon.stop()
+
+    # Create and start tray icon here, after on_details and on_quit are defined
+    tray_image, tray_menu = create_tray_icon(on_details, on_quit)
+    icon = pystray.Icon("LangSwitch", tray_image, "LangSwitch", tray_menu)
+    tray_thread = threading.Thread(target=icon.run, daemon=True)
+    tray_thread.start()
 
     keyboard.hook(on_key)
     while not exit_flag.is_set():
@@ -441,12 +528,7 @@ if __name__ == "__main__":
         sys.exit(1)
     print(f"Ready with wordlists: {found_langs}")
 
-    # System tray icon
-    icon = pystray.Icon("LangSwitch", create_tray_icon(), "LangSwitch")
-    tray_thread = threading.Thread(target=icon.run, daemon=True)
-    tray_thread.start()
-
-    # Start word detection and correction logic if at least 2 languages are loaded
+    # Remove tray icon creation from here; just call detect_and_correct_words
     if len(spellcheckers) >= 2:
         detect_and_correct_words(spellcheckers, list(lang_id_to_folder.keys()), lang_id_to_folder)
     else:

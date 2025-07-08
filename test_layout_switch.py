@@ -5,6 +5,11 @@ import win32con
 import win32gui
 import win32process
 import ctypes
+import os
+import threading
+import pystray
+import webbrowser
+from PIL import Image, ImageDraw
 
 # English and Hebrew full HKL strings (US English: 00000409, Hebrew: 0000040d)
 EN_HKL = '00000409'
@@ -50,6 +55,22 @@ def method3_post_message_w_full_hkl(hkl_str):
     time.sleep(0.5)
     print_current_layout()
 
+def create_tray_icon(on_details_callback, on_quit_callback):
+    # Simple black/white icon
+    image = Image.new('RGB', (64, 64), color='white')
+    d = ImageDraw.Draw(image)
+    d.rectangle([16, 16, 48, 48], fill='black')
+
+    def open_coffee(icon, item):
+        webbrowser.open(COFFEE_LINK)
+
+    menu = (
+        item('Details', on_details_callback),
+        item('Buy me a coffee', open_coffee),
+        item('Quit', on_quit_callback),
+    )
+    return image, menu
+
 def main():
     if len(sys.argv) != 2 or sys.argv[1] not in {'1', '2', '3'}:
         print("Usage: python test_layout_switch.py [method]  # method = 1, 2, or 3")
@@ -79,4 +100,10 @@ def main():
     print("\n[INFO] Test complete. Please report which method worked.")
 
 if __name__ == "__main__":
+    # System tray icon with Details and Quit option
+    tray_quit = lambda icon, item: os._exit(0)
+    tray_image, tray_menu = create_tray_icon(on_details, tray_quit)
+    icon = pystray.Icon("LangSwitch", tray_image, "LangSwitch", tray_menu)
+    tray_thread = threading.Thread(target=icon.run, daemon=True)
+    tray_thread.start()
     main() 
