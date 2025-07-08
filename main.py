@@ -166,16 +166,13 @@ def get_foreground_keyboard_layout():
 
 # Helper to switch Windows keyboard layout robustly
 def switch_keyboard_layout(lang_id, folder=None):
-    import ctypes
+    import win32gui
     hwnd = win32gui.GetForegroundWindow()
-    layout = int(lang_id, 16)
-    print(f"[DEBUG] Switching keyboard layout to lang_id={lang_id}, folder={folder}, layout={layout}")
-    # Load the layout
-    hkl = win32api.LoadKeyboardLayout(f"{lang_id}", 1)
-    # Activate for the process/thread
-    ctypes.windll.user32.ActivateKeyboardLayout(hkl, 0)
-    # Send message to the foreground window to request the layout change
-    win32api.SendMessage(hwnd, 0x0050, 0, hkl)  # 0x0050 = WM_INPUTLANGCHANGEREQUEST
+    # Use full 8-digit HKL string
+    hkl_str = f"0000{lang_id}" if len(lang_id) == 4 else lang_id
+    hkl = win32api.LoadKeyboardLayout(hkl_str, 0x00000001)  # KLF_ACTIVATE
+    print(f"[DEBUG] Switching keyboard layout to lang_id={lang_id}, folder={folder}, hkl_str={hkl_str}, hkl={hkl}")
+    win32gui.SendMessage(hwnd, 0x0050, 0, hkl)  # WM_INPUTLANGCHANGEREQUEST
     # Verification: print the current layout after switching
     current_layout = get_foreground_keyboard_layout()
     print(f"[DEBUG] Current layout after switch: {current_layout}")
@@ -261,6 +258,11 @@ def detect_and_correct_words(spellcheckers, lang_ids, lang_id_to_folder):
 
     def on_key(event):
         nonlocal current_word, word_buffer, word_lang_buffer, last_correction, current_lang_id, current_lang
+        # Always detect the real current keyboard layout
+        detected_lang_id = get_foreground_keyboard_layout()
+        if detected_lang_id in lang_id_to_folder:
+            current_lang_id = detected_lang_id
+            current_lang = lang_id_to_folder[detected_lang_id]
         if event.event_type == 'down':
             if event.name == 'space' or event.name == 'enter':
                 if current_word:
